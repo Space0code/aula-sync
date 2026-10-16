@@ -68,6 +68,37 @@ class Dedupe(unittest.TestCase):
             self.assertEqual(len(idx.by_size[5]), 2)  # L1.pdf and other.pdf, not L1_auto.pdf
 
 
+class NoClobber(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.TemporaryDirectory()
+        A.DEST = self.d.name
+        self.f = os.path.join(self.d.name, "c", "slides", "L3_auto.pdf")
+        os.makedirs(os.path.dirname(self.f))
+        with open(self.f, "wb") as fh:
+            fh.write(b"v1")
+        self.rec = {"path": "c/slides/L3_auto.pdf", "sha256": hashlib.sha256(b"v1").hexdigest()}
+
+    def tearDown(self):
+        self.d.cleanup()
+
+    def test_free_path_is_used(self):
+        free = os.path.join(self.d.name, "c", "slides", "new_auto.pdf")
+        self.assertEqual(A.safe_dst(free, None), free)
+
+    def test_own_unmodified_copy_is_replaced(self):
+        self.assertEqual(A.safe_dst(self.f, self.rec), self.f)
+
+    def test_user_edited_copy_is_kept(self):
+        with open(self.f, "wb") as fh:
+            fh.write(b"v1 + iPad annotations")
+        self.assertTrue(A.safe_dst(self.f, self.rec).endswith("L3_auto (2).pdf"))
+
+    def test_other_items_file_is_kept(self):  # two Moodle files mapping to the same name
+        self.assertTrue(A.safe_dst(self.f, None).endswith("L3_auto (2).pdf"))
+        self.assertTrue(A.safe_dst(self.f, {"path": "elsewhere", "sha256": self.rec["sha256"]})
+                        .endswith("L3_auto (2).pdf"))
+
+
 class AtomicPlace(unittest.TestCase):
     def test_place_creates_dirs_and_replaces(self):
         with tempfile.TemporaryDirectory() as d:

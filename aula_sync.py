@@ -361,6 +361,29 @@ def place(tmp, dst):
     os.replace(tmp, dst)
 
 
+def safe_dst(dst, rec):
+    """Never clobber a file we don't own unmodified.
+
+    `dst` may be overwritten only if it is the path recorded for this very item AND still
+    byte-identical to what we wrote (so iPad annotations / edits survive a teacher's update).
+    Otherwise pick a free sibling name: 'L3_auto (2).pdf'.
+    """
+    if not os.path.lexists(dst):
+        return dst
+    if rec and rec.get("path") == os.path.relpath(dst, DEST) and rec.get("sha256"):
+        try:
+            if sha256(dst) == rec["sha256"]:
+                return dst
+        except OSError:
+            pass
+    stem, ext = re.match(r"^(.*?)(\.tar\.gz|\.[A-Za-z0-9]{1,8})?$", os.path.basename(dst)).groups()
+    for i in range(2, 1000):
+        cand = os.path.join(os.path.dirname(dst), f"{stem} ({i}){ext or ''}")
+        if not os.path.lexists(cand):
+            return cand
+    raise RuntimeError(f"no free name for {dst}")
+
+
 def sync_item(m, item, cfolder, ccfg, state, index, dry, disk, changes):
     key = f"{ccfg['id']}:{item['key']}"
     rec = state["files"].get(key)
@@ -376,9 +399,12 @@ def sync_item(m, item, cfolder, ccfg, state, index, dry, disk, changes):
         tmp = os.path.join(STAGING, "page.part")
         with open(tmp, "wb") as f:
             f.write(body)
+        if rec and rec.get("path"):
+            dst = os.path.join(DEST, rec["path"])
+        dst = safe_dst(dst, rec)
         place(tmp, dst)
         state["files"][key] = dict(version=digest, path=os.path.relpath(dst, DEST), size=len(body),
-                                   time=time.time())
+                                   sha256=hashlib.sha256(body).hexdigest(), time=time.time())
         changes.append(("new" if not rec else "updated", dst, len(body)))
         return
 
@@ -445,6 +471,7 @@ def sync_item(m, item, cfolder, ccfg, state, index, dry, disk, changes):
             return
         if status == "updated" and rec.get("duplicate_of") is None and rec.get("path"):
             dst = os.path.join(DEST, rec["path"])  # keep the location chosen the first time
+        dst = safe_dst(dst, rec)
         place(tmp, dst)
         newrec["path"] = os.path.relpath(dst, DEST)
         state["files"][key] = newrec
