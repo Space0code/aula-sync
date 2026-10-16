@@ -851,6 +851,9 @@ def main():
     elif a.cmd == "test-ntfy":
         send_ntfy("Aula sync: test", f"Test notification from aula-sync at {dt.datetime.now():%Y-%m-%d %H:%M}.")
         print("sent")
+    elif a.cmd == "test-ntfy":
+        send_ntfy("Aula sync: test", f"Test notification from aula-sync at {dt.datetime.now():%Y-%m-%d %H:%M}.")
+        print("sent")
     elif a.cmd == "courses":
         config = load_json(CONFIG, None) or load_json(DEFAULT_CONFIG, {"courses": {}})
         m = Moodle()
