@@ -554,8 +554,12 @@ def run(dry=False):
                 if not q or not channel_ready(ch):
                     continue
                 try:
-                    send(f"Aula Global: {sum(map(len, q.values()))} new/updated files",
-                         changes_text({c: [(s, os.path.join(DEST, p), n) for s, p, n in v] for c, v in q.items()}))
+                    subject = change_subject(q)
+                    text = changes_text({c: [(s, os.path.join(DEST, p), n) for s, p, n in v] for c, v in q.items()})
+                    if ch == "mail":
+                        send(subject, text, html=changes_html(q, config))
+                    else:
+                        send(subject, text)
                     queues[ch] = {}
                 except Exception as e:
                     log.error("%s notification not sent (kept for next run): %s", ch, e)
@@ -613,12 +617,162 @@ def changes_text(changes):
 
 
 # ---------------------------------------------------------------- mail
-def send_mail(subject, body):
+CATEGORY_LABEL = {"slides": ("Slides", "📊"), "lectures": ("Slides", "📊"), "readings": ("Readings", "📖"),
+                  "exercises": ("Exercises", "✏️"), "assignments": ("Assignments", "📝"),
+                  "code": ("Code & data", "💻"), "lab": ("Code & data", "💻"), "other": ("Other", "📎")}
+FILE_ICON = {"pdf": "📄", "ipynb": "📓", "py": "🐍", "html": "🧾", "png": "🖼️", "jpg": "🖼️", "zip": "🗜️",
+             "pptx": "📊", "ppsx": "📊", "ppt": "📊", "docx": "📃", "csv": "📈", "arff": "📈"}
+MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+
+
+def change_subject(q):
+    n = sum(map(len, q.values()))
+    courses = sorted(q, key=lambda c: -len(q[c]))
+    shown = ", ".join(courses[:3]) + (f" +{len(courses) - 3}" if len(courses) > 3 else "")
+    return f"📚 {n} new file{'s' if n != 1 else ''} on Aula Global · {shown}"
+
+
+def fmt_size(n):
+    if n is None or n < 0:
+        return ""
+    return f"{n / 1e6:.1f} MB" if n >= 1e6 else f"{max(1, round(n / 1e3))} KB"
+
+
+def display_name(relpath):
+    """'nli/slides/L3_auto.pdf' -> 'L3.pdf'"""
+    base = os.path.basename(relpath)
+    return re.sub(re.escape(SUFFIX) + r"(?=(\.[^.]+)?$| \(\d+\))", "", base, count=1)
+
+
+def changes_html(q, config):
+    """Gmail-safe HTML (tables + inline styles) for a queue {course: [[status, relpath, size], ...]}."""
+    esc = htmllib.escape
+    ids = {c.get("name"): cid for cid, c in config.get("courses", {}).items()}
+    total = sum(map(len, q.values()))
+    size = sum(max(n or 0, 0) for v in q.values() for _, _, n in v)
+    now = dt.datetime.now()
+    when = f"{now.day} {MONTHS[now.month - 1]} {now.year}, {now:%H:%M}"
+    font = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+    out = [f'<div style="background:#f4f1ec;padding:24px 12px;font-family:{font};color:#1f1d1a">'
+           '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+           'style="max-width:620px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden;'
+           'border:1px solid #e6e1d8">'
+           '<tr><td style="background:#b5121b;padding:22px 26px;color:#ffffff">'
+           '<div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.85">'
+           'Aula Global · UPF</div>'
+           f'<div style="font-size:24px;font-weight:700;margin-top:4px">{total} new file{"s" if total != 1 else ""}'
+           '</div>'
+           f'<div style="font-size:14px;opacity:.9;margin-top:4px">{len(q)} course{"s" if len(q) != 1 else ""}'
+           f' · {fmt_size(size)} · {when}</div></td></tr>']
+    for course in sorted(q, key=str.lower):
+        cid = ids.get(course)
+        link = (f'<a href="{L.BASE}/course/view.php?id={cid}" style="color:#b5121b;text-decoration:none;'
+                f'font-size:13px;font-weight:600">Open in Aula ↗</a>') if cid else ""
+        out.append('<tr><td style="padding:22px 26px 6px">'
+                   '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
+                   f'<td style="font-size:18px;font-weight:700">{esc(course)}</td>'
+                   f'<td align="right">{link}</td></tr></table></td></tr>')
+        groups = {}
+        for status, rel, n in q[course]:
+            parts = rel.split("/")
+            key = parts[1] if len(parts) > 2 else "other"
+            label, icon = CATEGORY_LABEL.get(key, (key.replace("_", " ").title(), "📁"))
+            if key == "assignments" and len(parts) > 3:
+                label, icon = f"Assignment · {parts[2]}", "📝"
+            groups.setdefault((label, icon), []).append((status, rel, n))
+        for (label, icon), items in groups.items():
+            out.append(f'<tr><td style="padding:10px 26px 2px;font-size:12px;font-weight:700;letter-spacing:.06em;'
+                       f'text-transform:uppercase;color:#8a8378">{icon}&nbsp; {esc(label)}</td></tr>'
+                       '<tr><td style="padding:0 26px">'
+                       '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+                       'style="border-collapse:collapse">')
+            for status, rel, n in items:
+                badge = ('<span style="background:#e8f5ec;color:#1e7a3e;font-size:11px;font-weight:700;'
+                         'padding:2px 7px;border-radius:9px">NEW</span>' if status == "new" else
+                         '<span style="background:#fff4dc;color:#946200;font-size:11px;font-weight:700;'
+                         'padding:2px 7px;border-radius:9px">UPDATED</span>')
+                p = rel.split("/")
+                sub = "/".join(p[3:-1] if p[1] == "assignments" else p[2:-1])  # only what the header lacks
+                out.append('<tr><td style="padding:9px 0;border-bottom:1px solid #f0ece5;width:26px;'
+                           f'vertical-align:top;font-size:16px">{FILE_ICON.get(ext_of(rel), "📄")}</td>'
+                           '<td style="padding:9px 8px;border-bottom:1px solid #f0ece5">'
+                           f'<div style="font-size:15px;font-weight:600;word-break:break-word">'
+                           f'{esc(display_name(rel))}</div>'
+                           + (f'<div style="font-size:12px;color:#9a9388;margin-top:2px">{esc(sub)}</div>'
+                              if sub else "") + '</td>'
+                           '<td align="right" style="padding:9px 0;border-bottom:1px solid #f0ece5;'
+                           f'white-space:nowrap;vertical-align:top">{badge}'
+                           f'<div style="font-size:12px;color:#9a9388;margin-top:4px">{fmt_size(n)}</div>'
+                           '</td></tr>')
+            out.append("</table></td></tr>")
+    out.append('<tr><td style="padding:22px 26px 24px">'
+               '<div style="background:#f8f6f2;border-radius:10px;padding:14px 16px;font-size:13px;'
+               'color:#5c574f;line-height:1.5">On iPad / iPhone: <b>Files</b> → <b>iCloud Drive</b> → '
+               'Izobrazba → magisterij → materials. Synced copies end in <code>_auto</code>; '
+               'your own files are never touched.</div></td></tr></table>'
+               '<div style="text-align:center;font-size:11px;color:#a39d92;margin-top:12px">'
+               'aula-sync · runs every 6 h on your Mac</div></div>')
+    return "".join(out)
+
+
+ERROR_TITLES = {
+    "auth": ("Aula sync can't log in", "Your UPF login stored in Keychain was rejected or is missing. "
+             "Did you change your UPF password or set up 2FA again? Then re-import it from Apple Passwords: "
+             "Passwords app → File → Export All Passwords → ~/Downloads/Passwords.csv, then run "
+             "tools/import_from_apple_passwords.py (see the README). Until then, no files are synced."),
+    "disk": ("Aula sync paused: disk space", "A run would download more than 3 GB or leave less than 5 GB "
+             "free on the Mac. Free some space; the next run picks up where it stopped."),
+    "network": ("Aula sync offline for 2 days", "No successful run in 48 h because Aula Global was "
+                "unreachable. This usually fixes itself; check the Mac's connection if it persists."),
+    "crash": ("Aula sync crashed", "Something unexpected broke, possibly a change on Aula Global's side. "
+              "The details are below and in ~/Library/Logs/aula-sync/aula-sync.log."),
+}
+
+
+def error_html(kind, text, test=False):
+    esc = htmllib.escape
+    title, advice = ERROR_TITLES.get(kind, ("Aula sync problem", ""))
+    font = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+    banner = ('<div style="background:#eef3ff;color:#2a4a8a;padding:10px 26px;font-size:13px;font-weight:600">'
+              'This is a test alert, nothing is actually wrong.</div>') if test else ""
+    return (f'<div style="background:#f4f1ec;padding:24px 12px;font-family:{font};color:#1f1d1a">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;'
+            'margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;border:1px solid #e6e1d8">'
+            '<tr><td style="background:#8a1c12;padding:22px 26px;color:#fff">'
+            '<div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.85">'
+            'Aula Global · UPF</div>'
+            f'<div style="font-size:22px;font-weight:700;margin-top:4px">⚠️ {esc(title)}</div></td></tr>'
+            f'<tr><td>{banner}</td></tr>'
+            f'<tr><td style="padding:20px 26px 6px;font-size:15px;line-height:1.55">{esc(advice)}</td></tr>'
+            '<tr><td style="padding:12px 26px 24px"><div style="font-size:12px;font-weight:700;'
+            'letter-spacing:.06em;text-transform:uppercase;color:#8a8378;margin-bottom:6px">Details</div>'
+            '<pre style="background:#f8f6f2;border-radius:10px;padding:12px 14px;font-size:12px;'
+            f'white-space:pre-wrap;word-break:break-word;margin:0;color:#5c574f">{esc(text[-4000:])}</pre>'
+            '</td></tr></table><div style="text-align:center;font-size:11px;color:#a39d92;margin-top:12px">'
+            'aula-sync · runs every 6 h on your Mac · max one alert per problem per day</div></div>')
+
+
+def sample_queue(limit=40):
+    """Recently synced files from state, as a change queue, for the test email."""
+    state = load_json(STATE, {"files": {}})
+    config = load_json(CONFIG, None) or load_json(DEFAULT_CONFIG, {"courses": {}})
+    names = {c["folder"]: c.get("name", c["folder"]) for c in config["courses"].values()}
+    recs = sorted((r for r in state["files"].values() if r.get("path")), key=lambda r: -r.get("time", 0))[:limit]
+    q = {}
+    for r in recs:
+        q.setdefault(names.get(r["path"].split("/")[0], r["path"].split("/")[0]), []).append(
+            ["new", r["path"], r.get("size")])
+    return q, config
+
+
+def send_mail(subject, body, html=None):
     _, pw = L.keychain("aula-sync-gmail", MAIL_FROM)
     pw = pw.replace(" ", "")  # Google displays app passwords as 4 groups of 4
     msg = EmailMessage()
     msg["Subject"], msg["From"], msg["To"] = subject, f"Aula sync <{MAIL_FROM}>", MAIL_TO
     msg.set_content(body)
+    if html:
+        msg.add_alternative(html, subtype="html")
     with smtplib.SMTP("smtp.gmail.com", 587, timeout=60) as s:
         s.starttls()
         s.login(MAIL_FROM, pw)
@@ -656,14 +810,17 @@ def error_mail(state, kind, text):
     if time.time() - last < ERROR_MAIL_EVERY:
         return
     sent = False
+    test = "[TEST] " if os.environ.get("AULA_SYNC_UPF_USER") or os.environ.get("AULA_SYNC_HOME") else ""
+    title, _ = ERROR_TITLES.get(kind, ("Aula sync problem", ""))
+    subject = f"{test}⚠️ {title}"
     for ch, send in CHANNELS.items():
         if not channel_ready(ch):
             continue
         try:
             if ch == "ntfy":
-                send(f"Aula sync problem: {kind}", text[-3000:], priority="high", tags="warning")
+                send(subject, text[-3000:], priority="high", tags="warning")
             else:
-                send(f"Aula sync problem: {kind}", text)
+                send(subject, text, html=error_html(kind, text, bool(test)))
             sent = True
         except Exception as e:
             log.error("could not send %s alert: %s", ch, e)
@@ -676,14 +833,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["run", "test-email", "test-ntfy", "courses"])
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--with-error", action="store_true", help="test-email: also send a sample error alert")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
     setup_logging(a.verbose or a.cmd != "run" or a.dry_run)
     if a.cmd == "run":
         run(dry=a.dry_run)
     elif a.cmd == "test-email":
-        send_mail("Aula sync: test email", f"Test email from aula-sync at {dt.datetime.now():%Y-%m-%d %H:%M}.\n"
-                  f"Destination: {DEST}")
+        q, config = sample_queue()
+        text = changes_text({c: [(s, os.path.join(DEST, p), n) for s, p, n in v] for c, v in q.items()})
+        send_mail("[TEST] " + change_subject(q), text, html=changes_html(q, config))
+        if "--with-error" in sys.argv:
+            send_mail("[TEST] ⚠️ " + ERROR_TITLES["auth"][0], "sample",
+                      html=error_html("auth", "Aula Global login failed: UPF SSO rejected the username/password",
+                                      test=True))
+        print("sent")
+    elif a.cmd == "test-ntfy":
+        send_ntfy("Aula sync: test", f"Test notification from aula-sync at {dt.datetime.now():%Y-%m-%d %H:%M}.")
         print("sent")
     elif a.cmd == "test-ntfy":
         send_ntfy("Aula sync: test", f"Test notification from aula-sync at {dt.datetime.now():%Y-%m-%d %H:%M}.")

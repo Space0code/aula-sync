@@ -99,6 +99,24 @@ class NoClobber(unittest.TestCase):
                         .endswith("L3_auto (2).pdf"))
 
 
+class MailRendering(unittest.TestCase):
+    def test_display_name(self):
+        self.assertEqual(A.display_name("nli/slides/L3_auto.pdf"), "L3.pdf")
+        self.assertEqual(A.display_name("nli/slides/L3_auto (2).pdf"), "L3 (2).pdf")
+        self.assertEqual(A.display_name("x/other/Makefile_auto"), "Makefile")
+
+    def test_html_groups_and_escapes(self):
+        q = {"NLI <x>": [["new", "nli/slides/L3_auto.pdf", 14_080_400],
+                         ["updated", "nli/assignments/L4 ASR/submission/a_auto.ipynb", 609_068]]}
+        html = A.changes_html(q, {"courses": {"94487": {"name": "NLI <x>"}}})
+        self.assertIn("NLI &lt;x&gt;", html)
+        self.assertIn("course/view.php?id=94487", html)
+        self.assertIn("Assignment · L4 ASR", html)
+        self.assertIn("14.1 MB", html)
+        self.assertIn("UPDATED", html)
+        self.assertTrue(A.change_subject(q).startswith("📚 2 new files"))
+
+
 class AtomicPlace(unittest.TestCase):
     def test_place_creates_dirs_and_replaces(self):
         with tempfile.TemporaryDirectory() as d:
