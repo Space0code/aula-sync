@@ -88,17 +88,17 @@ def login(sess, username, password, totp_secret=None, debug_dir=None):
                      headers={"Origin": "https://autenticacio.upf.edu", "Referer": resp.url})
     _dump(debug_dir, "after_password.html", resp.text)
 
-    soup = BeautifulSoup(resp.text, "html.parser")
-    otp_input = soup.find("input", attrs={"name": re.compile("otp", re.I)})
-    if otp_input is not None and "SAMLResponse" not in resp.text:
+    verify = BeautifulSoup(resp.text, "html.parser").find("a", class_="notification_2Factor_button")
+    if verify is not None and "SAMLResponse" not in resp.text:
         if not totp_secret:
-            raise AuthError("UPF SSO asks for an OTP code and no TOTP secret is configured")
-        import pyotp
-        form = otp_input.find_parent("form")
-        data = _fields(form)
-        data[otp_input.get("name")] = pyotp.TOTP(totp_secret).now()
-        resp = sess.post(requests.compat.urljoin(resp.url, form.get("action")), data=data, timeout=60)
+            raise AuthError("UPF SSO asks for a 2FA code and no TOTP secret is configured")
+        resp = sess.post(requests.compat.urljoin(resp.url, verify.get("href")), timeout=60,
+                         data={"adAS_authn_module": "otp_module", "adAS_mode": "authn",
+                               "adAS_otp_code": totp_now(totp_secret)},
+                         headers={"Origin": "https://autenticacio.upf.edu", "Referer": resp.url})
         _dump(debug_dir, "after_otp.html", resp.text)
+        if "SAMLResponse" not in resp.text and "notification_2Factor_button" in resp.text:
+            raise AuthError("UPF SSO rejected the 2FA code (TOTP secret wrong or clock skew?)")
 
     if "SAMLResponse" not in resp.text and \
             BeautifulSoup(resp.text, "html.parser").find("input", attrs={"name": "adAS_password"}):
@@ -112,6 +112,15 @@ def login(sess, username, password, totp_secret=None, debug_dir=None):
     return resp.text
 
 
+def totp_now(secret):
+    """Current TOTP code; waits out the last 3 s of a period so the code can't expire in flight."""
+    import time
+    import pyotp
+    if 30 - time.time() % 30 < 3:
+        time.sleep(4)
+    return pyotp.TOTP(secret).now()
+
+
 def new_session():
     s = requests.Session()
     s.headers.update({"User-Agent": UA, "Accept-Language": "ca,es;q=0.9,en;q=0.8",
@@ -123,9 +132,10 @@ if __name__ == "__main__":  # login probe: python upf_login.py [debug_dir]
     import sys
     dbg = sys.argv[1] if len(sys.argv) > 1 else None
     user, pw = keychain("aula-sync-upf", "U283341")
+    _, totp = keychain("aula-sync-totp", user)
     s = new_session()
     try:
-        html = login(s, user, pw, debug_dir=dbg)
+        html = login(s, user, pw, totp, debug_dir=dbg)
         print("LOGIN OK, sesskey present:", bool(sesskey(html)))
     except AuthError as e:
         print("AUTH ERROR:", e)
