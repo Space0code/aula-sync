@@ -56,6 +56,8 @@ You also get an email for:
 
 Each kind of error is emailed at most once per 24 h. If sending fails, the change list is kept and goes out with the next successful email.
 
+The same notifications also go out as **ntfy push** messages to a private topic. The topic name is stored in Keychain as `aula-sync-ntfy` (account `topic`); `security find-generic-password -s aula-sync-ntfy -a topic -w` prints it. Subscribe to it in the ntfy app on the Mac and the iPhone: tap **+**, enter the topic, leave the server as ntfy.sh. Email and ntfy keep separate queues, so a channel that is down or not set up yet catches up later. `aula_sync.py test-ntfy` sends a test push.
+
 ## Common tasks
 ```bash
 APP="$HOME/Library/Application Support/aula-sync/app"
@@ -84,7 +86,12 @@ There's no SSO token to expire. Every run reuses the saved Moodle session, and w
 1. In the Passwords app: File → Export All Passwords → `~/Downloads/Passwords.csv`.
 2. Run `/usr/bin/python3 tools/import_from_apple_passwords.py ~/Downloads/Passwords.csv U283341`. It copies only the `autenticacio.upf.edu` entry (password and TOTP secret) into Keychain and deletes the CSV.
 
-**Gmail app password:** create one at <https://myaccount.google.com/apppasswords>, then in Terminal run `security add-generic-password -U -s aula-sync-gmail -a bozak.tomi@gmail.com -w`.
+**Gmail app password:** this is a 16-letter code that *Google generates*; a password you make up yourself won't work.
+1. Turn on 2-Step Verification (<https://myaccount.google.com/signinoptions/twosv>).
+2. Open <https://myaccount.google.com/apppasswords>, name it `aula-sync`, and click Create.
+3. In Terminal.app, run `security add-generic-password -U -s aula-sync-gmail -a bozak.tomi@gmail.com -w` and paste the code twice. Spaces don't matter.
+
+Revoke it on the same page at any time.
 
 ## Tests
 `.venv/bin/python -m unittest discover -s tests` covers naming, categorisation, subfolder overrides, dedupe and the atomic move.

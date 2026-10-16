@@ -541,18 +541,24 @@ def run(dry=False):
         else:
             state["last_success"] = time.time()
             log.info("run ok: %d changed files, %.1f MB", sum(map(len, changes.values())), total / 1e6)
-            pending = state.setdefault("pending_mail", {})
-            for course, items in changes.items():
-                pending.setdefault(course, []).extend([s, os.path.relpath(p, DEST), n] for s, p, n in items)
+            # one queue per channel: a channel that is down or not set up yet keeps its list
+            queues = state.setdefault("pending", {})
+            legacy = state.pop("pending_mail", None)
+            for ch in CHANNELS:
+                q = queues.setdefault(ch, json.loads(json.dumps(legacy)) if legacy else {})
+                for course, items in changes.items():
+                    q.setdefault(course, []).extend([s, os.path.relpath(p, DEST), n] for s, p, n in items)
             save_json(STATE, state)
-            if pending:
+            for ch, send in CHANNELS.items():
+                q = queues[ch]
+                if not q or not channel_ready(ch):
+                    continue
                 try:
-                    send_mail(f"Aula Global: {sum(map(len, pending.values()))} new/updated files",
-                              changes_text({c: [(s, os.path.join(DEST, p), n) for s, p, n in v]
-                                            for c, v in pending.items()}))
-                    state["pending_mail"] = {}
-                except Exception as e:  # keep the list; it goes out with the next successful mail
-                    log.error("change mail not sent (kept for next run): %s", e)
+                    send(f"Aula Global: {sum(map(len, q.values()))} new/updated files",
+                         changes_text({c: [(s, os.path.join(DEST, p), n) for s, p, n in v] for c, v in q.items()}))
+                    queues[ch] = {}
+                except Exception as e:
+                    log.error("%s notification not sent (kept for next run): %s", ch, e)
     except L.AuthError as e:
         error_mail(state, "auth", f"Aula Global login failed: {e}\n\n" + REAUTH_HELP)
     except DiskGuard as e:
@@ -609,6 +615,7 @@ def changes_text(changes):
 # ---------------------------------------------------------------- mail
 def send_mail(subject, body):
     _, pw = L.keychain("aula-sync-gmail", MAIL_FROM)
+    pw = pw.replace(" ", "")  # Google displays app passwords as 4 groups of 4
     msg = EmailMessage()
     msg["Subject"], msg["From"], msg["To"] = subject, f"Aula sync <{MAIL_FROM}>", MAIL_TO
     msg.set_content(body)
@@ -619,22 +626,55 @@ def send_mail(subject, body):
     log.info("mail sent: %s", subject)
 
 
+def send_ntfy(title, body, priority="default", tags="books"):
+    _, topic = L.keychain("aula-sync-ntfy", "topic")
+    if len(body.encode()) > 3800:  # ntfy message limit is 4 KB
+        body = body.encode()[:3800].decode(errors="ignore") + "\n…(full list in the email / log)"
+    r = requests.post(f"https://ntfy.sh/{topic}", data=body.encode(), timeout=30,
+                      headers={"Title": title.encode("utf-8").decode("latin-1", "replace"),
+                               "Priority": priority, "Tags": tags})
+    r.raise_for_status()
+    log.info("ntfy sent: %s", title)
+
+
+CHANNELS = {"mail": send_mail, "ntfy": send_ntfy}
+CHANNEL_ITEMS = {"mail": ("aula-sync-gmail", MAIL_FROM), "ntfy": ("aula-sync-ntfy", "topic")}
+
+
+def channel_ready(ch):
+    try:
+        L.keychain(*CHANNEL_ITEMS[ch])
+        return True
+    except L.AuthError:
+        return False
+
+
 def error_mail(state, kind, text):
+    """Alert on every configured channel, at most once per 24 h per error kind."""
     log.error("%s: %s", kind, text)
     last = state["mail"].get(kind, 0)
     if time.time() - last < ERROR_MAIL_EVERY:
         return
-    try:
-        send_mail(f"Aula sync problem: {kind}", text)
+    sent = False
+    for ch, send in CHANNELS.items():
+        if not channel_ready(ch):
+            continue
+        try:
+            if ch == "ntfy":
+                send(f"Aula sync problem: {kind}", text[-3000:], priority="high", tags="warning")
+            else:
+                send(f"Aula sync problem: {kind}", text)
+            sent = True
+        except Exception as e:
+            log.error("could not send %s alert: %s", ch, e)
+    if sent:
         state["mail"][kind] = time.time()
-    except Exception as e:
-        log.error("could not send error mail: %s", e)
 
 
 # ---------------------------------------------------------------- cli
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["run", "test-email", "courses"])
+    ap.add_argument("cmd", choices=["run", "test-email", "test-ntfy", "courses"])
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
@@ -644,6 +684,9 @@ def main():
     elif a.cmd == "test-email":
         send_mail("Aula sync: test email", f"Test email from aula-sync at {dt.datetime.now():%Y-%m-%d %H:%M}.\n"
                   f"Destination: {DEST}")
+        print("sent")
+    elif a.cmd == "test-ntfy":
+        send_ntfy("Aula sync: test", f"Test notification from aula-sync at {dt.datetime.now():%Y-%m-%d %H:%M}.")
         print("sent")
     elif a.cmd == "courses":
         config = load_json(CONFIG, None) or load_json(DEFAULT_CONFIG, {"courses": {}})
