@@ -1,0 +1,13 @@
+{
+ "courses": {
+  "94484": {"name": "Autonomous systems", "folder": "autonomous_systems", "include": true},
+  "95228": {"name": "General information", "folder": "general_information", "include": true},
+  "94486": {"name": "Introduction to machine learning", "folder": "introduction_to_machine_learning", "include": true},
+  "94487": {"name": "Natural language interaction", "folder": "natural_language_interaction", "include": true,
+            "subfolders": {"code": "lab"}},
+  "94773": {"name": "Spanish A1", "folder": "spanish", "include": true},
+  "96098": {"name": "Reinforcement learning", "folder": "reinforcement_learning", "include": true},
+  "94485": {"name": "Symbolic reasoning", "folder": "symbolic_reasoning", "include": true,
+            "subfolders": {"slides": "lectures"}}
+ }
+}
