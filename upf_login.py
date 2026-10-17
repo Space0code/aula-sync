@@ -128,10 +128,12 @@ def new_session():
     return s
 
 
-if __name__ == "__main__":  # login probe: python upf_login.py [debug_dir]
+if __name__ == "__main__":  # login probe: python upf_login.py U123456 [debug_dir]
     import sys
-    dbg = sys.argv[1] if len(sys.argv) > 1 else None
-    user, pw = keychain("aula-sync-upf", "U283341")
+    if len(sys.argv) < 2:
+        sys.exit("usage: upf_login.py <upf_user> [debug_dir]")
+    dbg = sys.argv[2] if len(sys.argv) > 2 else None
+    user, pw = keychain("aula-sync-upf", sys.argv[1])
     _, totp = keychain("aula-sync-totp", user)
     s = new_session()
     try:

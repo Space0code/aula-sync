@@ -2,15 +2,26 @@
 """Copy the UPF SSO password + TOTP secret from an Apple Passwords CSV export into
 the login Keychain, then delete the CSV. Nothing secret is printed.
 
-Usage: /usr/bin/python3 tools/import_from_apple_passwords.py ~/Downloads/Passwords.csv [U283341]
+Usage: /usr/bin/python3 tools/import_from_apple_passwords.py ~/Downloads/Passwords.csv [UPF_USER]
+UPF_USER defaults to "upf_user" in ~/Library/Application Support/aula-sync/settings.json.
 """
 import csv
+import json
 import os
 import subprocess
 import sys
 import urllib.parse
 
 HOST = "autenticacio.upf.edu"
+SETTINGS = os.path.expanduser("~/Library/Application Support/aula-sync/settings.json")
+
+
+def default_user():
+    try:
+        with open(SETTINGS) as f:
+            return json.load(f).get("upf_user", "")
+    except FileNotFoundError:
+        return ""
 
 
 def store(service, account, secret):
@@ -20,7 +31,9 @@ def store(service, account, secret):
 
 def main():
     path = os.path.expanduser(sys.argv[1])
-    user = sys.argv[2] if len(sys.argv) > 2 else "U283341"
+    user = sys.argv[2] if len(sys.argv) > 2 else default_user()
+    if not user:
+        sys.exit("Pass your UPF user code (e.g. U123456) or set upf_user in " + SETTINGS)
     try:
         with open(path, newline="", encoding="utf-8-sig") as f:
             rows = [r for r in csv.DictReader(f)
