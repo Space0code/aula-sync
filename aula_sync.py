@@ -32,17 +32,29 @@ import requests  # noqa: E402
 from bs4 import BeautifulSoup  # noqa: E402
 
 HOME = os.path.expanduser("~")
-DEST = os.path.join(HOME, "Library/Mobile Documents/com~apple~CloudDocs/Izobrazba/magisterij/materials")
+ICLOUD = os.path.join(HOME, "Library/Mobile Documents/com~apple~CloudDocs")
 APP_DIR = os.environ.get("AULA_SYNC_HOME", os.path.join(HOME, "Library/Application Support/aula-sync"))
 STAGING = os.path.join(HOME, "Library/Caches/aula-sync")
 LOG_DIR = os.path.join(HOME, "Library/Logs/aula-sync")
 STATE = os.path.join(APP_DIR, "state.json")
 COOKIES = os.path.join(APP_DIR, "cookies.pkl")
 CONFIG = os.path.join(APP_DIR, "courses.json")
-DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "courses.default.json")
+SETTINGS_FILE = os.path.join(APP_DIR, "settings.json")
 
-UPF_USER = os.environ.get("AULA_SYNC_UPF_USER", "U283341")
-MAIL_TO = MAIL_FROM = "bozak.tomi@gmail.com"
+
+def _load_settings():
+    """Personal settings live outside the repo in settings.json (see settings.example.json)."""
+    try:
+        with open(SETTINGS_FILE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+
+SETTINGS = _load_settings()
+DEST = os.path.expanduser(SETTINGS.get("destination") or os.path.join(ICLOUD, "Aula Global"))
+UPF_USER = os.environ.get("AULA_SYNC_UPF_USER") or SETTINGS.get("upf_user", "")
+MAIL_TO = MAIL_FROM = SETTINGS.get("email", "")  # Gmail address; empty disables email
 SUFFIX = "_auto"
 SPACING = 0.3            # seconds between requests
 MAX_RUN_BYTES = 3 * 1024**3
@@ -196,6 +208,8 @@ class Moodle:
         self.key = None
 
     def login(self):
+        if not UPF_USER:
+            raise L.AuthError(f"no upf_user set in {SETTINGS_FILE} (see README: Setup)")
         user, pw = L.keychain("aula-sync-upf", UPF_USER)
         try:
             _, totp = L.keychain("aula-sync-totp", UPF_USER)
@@ -512,7 +526,7 @@ def run(dry=False):
         wait_for_network()
         if not os.path.isdir(DEST):
             raise RuntimeError(f"destination folder missing: {DEST}")
-        config = load_json(CONFIG, None) or load_json(DEFAULT_CONFIG, {"courses": {}})
+        config = load_json(CONFIG, None) or {"courses": {}}
         m = Moodle()
         m.login()
         changes, disk = {}, Disk()
@@ -532,7 +546,7 @@ def run(dry=False):
                     state.setdefault("item_errors", {})[f"{ccfg['id']}:{item['key']}"] = str(e)[:300]
             if not dry:
                 save_json(STATE, state)
-        if config.pop("_dirty", False) and not dry:
+        if config.pop("_dirty", False):  # also in dry runs, so the mapping can be edited first
             save_json(CONFIG, config)
         changes = {k: v for k, v in changes.items() if v}
         total = sum(c[2] for v in changes.values() for c in v if c[2] > 0)
@@ -579,9 +593,18 @@ def run(dry=False):
         lock.close()
 
 
-REAUTH_HELP = """To fix: the sync logs in with the UPF password + TOTP secret stored in the macOS Keychain
-(items aula-sync-upf and aula-sync-totp, account U283341). If you changed your UPF password or
-re-enrolled 2FA, re-export Apple Passwords and run tools/import_from_apple_passwords.py (see README)."""
+REAUTH_HELP = f"""To fix: the sync logs in with the UPF password + TOTP secret stored in the macOS Keychain
+(items aula-sync-upf and aula-sync-totp, account {UPF_USER or '<upf_user>'}). If you changed your UPF password
+or re-enrolled 2FA, re-export Apple Passwords and run tools/import_from_apple_passwords.py (see README)."""
+
+
+def device_path_hint():
+    """'Files → iCloud Drive → A → B' for the iPad/iPhone footer, or the Mac path."""
+    if DEST.startswith(ICLOUD + os.sep):
+        parts = os.path.relpath(DEST, ICLOUD).split(os.sep)
+        return ("On iPad / iPhone: <b>Files</b> → <b>iCloud Drive</b> → "
+                + " → ".join(htmllib.escape(p) for p in parts) + ".")
+    return f"Saved on your Mac in {htmllib.escape(DEST)}."
 
 
 def wait_for_network(limit=180):
@@ -707,8 +730,7 @@ def changes_html(q, config):
             out.append("</table></td></tr>")
     out.append('<tr><td style="padding:22px 26px 24px">'
                '<div style="background:#f8f6f2;border-radius:10px;padding:14px 16px;font-size:13px;'
-               'color:#5c574f;line-height:1.5">On iPad / iPhone: <b>Files</b> → <b>iCloud Drive</b> → '
-               'Izobrazba → magisterij → materials. Synced copies end in <code>_auto</code>; '
+               f'color:#5c574f;line-height:1.5">{device_path_hint()} Synced copies end in <code>_auto</code>; '
                'your own files are never touched.</div></td></tr></table>'
                '<div style="text-align:center;font-size:11px;color:#a39d92;margin-top:12px">'
                'aula-sync · runs every 6 h on your Mac</div></div>')
@@ -755,7 +777,7 @@ def error_html(kind, text, test=False):
 def sample_queue(limit=40):
     """Recently synced files from state, as a change queue, for the test email."""
     state = load_json(STATE, {"files": {}})
-    config = load_json(CONFIG, None) or load_json(DEFAULT_CONFIG, {"courses": {}})
+    config = load_json(CONFIG, None) or {"courses": {}}
     names = {c["folder"]: c.get("name", c["folder"]) for c in config["courses"].values()}
     recs = sorted((r for r in state["files"].values() if r.get("path")), key=lambda r: -r.get("time", 0))[:limit]
     q = {}
@@ -796,6 +818,8 @@ CHANNEL_ITEMS = {"mail": ("aula-sync-gmail", MAIL_FROM), "ntfy": ("aula-sync-ntf
 
 
 def channel_ready(ch):
+    if ch == "mail" and not MAIL_FROM:
+        return False
     try:
         L.keychain(*CHANNEL_ITEMS[ch])
         return True
@@ -852,7 +876,7 @@ def main():
         send_ntfy("Aula sync: test", f"Test notification from aula-sync at {dt.datetime.now():%Y-%m-%d %H:%M}.")
         print("sent")
     elif a.cmd == "courses":
-        config = load_json(CONFIG, None) or load_json(DEFAULT_CONFIG, {"courses": {}})
+        config = load_json(CONFIG, None) or {"courses": {}}
         m = Moodle()
         m.login()
         for c in m.courses():

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.tomibozak.aula-sync</string>
+  <string>local.aula-sync</string>
   <key>ProgramArguments</key>
   <array>
     <string>__APP__/.venv/bin/python</string>
