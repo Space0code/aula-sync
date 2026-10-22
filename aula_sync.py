@@ -332,16 +332,9 @@ def discover_assign(m, cm, name):
     main = soup.find(id="region-main") or soup
     adir = clean_name(name)
     base = dict(module="assign", context=name)
-    # brief: title + dates + description (+ intro attachments)
-    parts = [f"<h1>{htmllib.escape(name)}</h1>"]
-    dates = main.select_one(".activity-dates")
-    if dates:
-        parts.append(str(dates))
-    intro = main.select_one("#intro")
-    if intro:
-        parts.append(str(intro))
-    yield dict(base, key=f"cm{cm['id']}:brief", kind="html", filename="brief.html", subdir=adir,
-               html=html_doc(name, "".join(parts)), source=cm["url"])
+    # intro attachments, submission and feedback files; the description itself stays on Aula (it was saved as
+    # brief.html until that turned out to be noise: dates and instructions are one click away, and Moodle emails
+    # due-date reminders)
     seen = set()
     for a in main.find_all("a", href=PF_RE):
         u = strip_query(a["href"])
@@ -623,6 +616,23 @@ def course_config(config, course):
     return c
 
 
+def drop_assignment_briefs(state):
+    """One-time cleanup: assignment briefs are no longer saved. Forget their records and delete the copies this
+    script made (brief*_auto*.html only), plus the assignment folder if that leaves it empty."""
+    for key in [k for k in state["files"] if k.endswith(":brief")]:
+        rel = state["files"].pop(key).get("path")
+        if not rel or not re.fullmatch(r"brief.*_auto.*\.html", os.path.basename(rel)):
+            continue
+        path = os.path.join(DEST, rel)
+        if os.path.lexists(path):
+            os.remove(path)
+            log.info("removed %s (assignment briefs are no longer saved)", path)
+        try:
+            os.rmdir(os.path.dirname(path))
+        except OSError:  # not empty (attachments, submission/) or already gone
+            pass
+
+
 def run(dry=False):
     os.makedirs(APP_DIR, exist_ok=True)
     os.makedirs(STAGING, exist_ok=True)
@@ -638,6 +648,8 @@ def run(dry=False):
         wait_for_network()
         if not os.path.isdir(DEST):
             raise RuntimeError(f"destination folder missing: {DEST}")
+        if not dry:
+            drop_assignment_briefs(state)
         config = load_json(CONFIG, None) or {"courses": {}}
         m = Moodle()
         m.login()
@@ -712,6 +724,12 @@ def run(dry=False):
 REAUTH_HELP = f"""To fix: the sync logs in with the UPF password + TOTP secret stored in the macOS Keychain
 (items aula-sync-upf and aula-sync-totp, account {UPF_USER or '<upf_user>'}). If you changed your UPF password
 or re-enrolled 2FA, re-export Apple Passwords and run tools/import_from_apple_passwords.py (see README)."""
+
+
+def schedule_hint():
+    """'syncs 08:00–20:00 and at lecture starts' for the email footers, from the configured schedule."""
+    hint = f"syncs {min(w[0] for w in SYNC_WINDOWS)}–{max(w[1] for w in SYNC_WINDOWS)}" if SYNC_WINDOWS else "syncs"
+    return hint + (" and at lecture starts" if CALENDAR_URL else "")
 
 
 def device_path_hint():
@@ -849,7 +867,7 @@ def changes_html(q, config):
                f'color:#5c574f;line-height:1.5">{device_path_hint()} Synced copies end in <code>_auto</code>; '
                'your own files are never touched.</div></td></tr></table>'
                '<div style="text-align:center;font-size:11px;color:#a39d92;margin-top:12px">'
-               'aula-sync · runs every 6 h on your Mac</div></div>')
+               f'aula-sync · {schedule_hint()} on your Mac</div></div>')
     return "".join(out)
 
 
@@ -887,7 +905,7 @@ def error_html(kind, text, test=False):
             '<pre style="background:#f8f6f2;border-radius:10px;padding:12px 14px;font-size:12px;'
             f'white-space:pre-wrap;word-break:break-word;margin:0;color:#5c574f">{esc(text[-4000:])}</pre>'
             '</td></tr></table><div style="text-align:center;font-size:11px;color:#a39d92;margin-top:12px">'
-            'aula-sync · runs every 6 h on your Mac · max one alert per problem per day</div></div>')
+            f'aula-sync · {schedule_hint()} on your Mac · max one alert per problem per day</div></div>')
 
 
 def sample_queue(limit=40):

@@ -12,7 +12,7 @@ Aula Global has the Moodle mobile web service turned off (`enablemobilewebservic
 3. The activity pages for resources, folders and assignments.
 
 ## What gets synced
-- **Included:** course files (resources), folders, files embedded in labels, and assignments: the brief (`brief_auto.html`), its attachments, your submission (`submission/`) and the feedback (`feedback/`, `feedback_auto.html`).
+- **Included:** course files (resources), folders, files embedded in labels, and assignments: their attachments, your submission (`submission/`) and the feedback (`feedback/`, `feedback_auto.html`). The assignment description itself is not saved; it stays one click away on Aula.
 - **Forums (notice boards):** checked for new posts, not downloaded; see Notifications.
 - **Skipped:** links, quizzes, Kaltura videos, books, pages, and video files.
 
@@ -21,7 +21,7 @@ Files land in `<destination>/<course folder>/<type>/<name>_auto.<ext>`:
 ```
 natural_language_interaction/slides/L3_auto.pdf
 natural_language_interaction/lab/Extra1_emotion_auto.ipynb        # "code" remapped to lab/
-natural_language_interaction/assignments/L4 ASR - Lab Delivery/brief_auto.html
+natural_language_interaction/assignments/L4 ASR - Lab Delivery/feedback_auto.html
 symbolic_reasoning/lectures/S01SR_auto.pdf                        # "slides" remapped to lectures/
 ```
 
@@ -89,7 +89,7 @@ The type folders are `slides`, `readings`, `exercises`, `assignments/<name>`, `c
    The dry run also writes `courses.json` with an automatic folder name for each course. Edit it before installing if you like (see *Courses* below).
 
 ## Notifications
-- **New or updated files:** one message after each run that found something, grouped by course and type (an HTML email plus a plain-text ntfy push). No changes, no message. A saved page (assignment `brief.html`, `feedback.html`) counts as changed only when its visible text or links change, not when Moodle re-renders its markup.
+- **New or updated files:** one message after each run that found something, grouped by course and type (an HTML email plus a plain-text ntfy push). No changes, no message. A saved feedback page (`feedback_auto.html`) counts as changed only when its visible text or links change, not when Moodle re-renders its markup.
 - **Forum posts:** Moodle already emails you every post in a discussion you're subscribed to (notice boards are subscribed by default). Each run checks every course forum and alerts you once about a new post Moodle won't email you, with its text and a link. The first check of a forum only records the posts already there. `forum_alerts` changes the rule.
 - **Problems:** you get an alert for a login failure (e.g. you changed your password or re-enrolled 2FA), a crash, the disk guard, or 48 h without a successful run because of the network. Each kind of problem is reported at most once per 24 h.
 - **Queues:** email and ntfy keep separate queues, so a channel that is down or not set up yet catches up later.
