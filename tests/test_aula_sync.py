@@ -127,6 +127,50 @@ class AtomicPlace(unittest.TestCase):
             self.assertEqual(open(f"{d}/a/b/f_auto.txt").read(), "new")
 
 
+class HtmlFingerprint(unittest.TestCase):
+    PAGE = ('<h1>problem set 1</h1><div id="assign_files_tree{}"><img src="https://x/theme/image.php/boost/core/{}/f/pdf">'
+            '<a href="https://x/pluginfile.php/1/problem1.pdf?forcedownload=1">problem1.pdf</a></div>')
+
+    def test_ignores_regenerated_markup(self):
+        self.assertEqual(A.html_fingerprint(self.PAGE.format("6ad9f42cddf301", 1)),
+                         A.html_fingerprint(self.PAGE.format("7be0a53deef412", 2)))
+
+    def test_sees_real_changes(self):
+        self.assertNotEqual(A.html_fingerprint(self.PAGE.format("a", 1)),
+                            A.html_fingerprint(self.PAGE.format("a", 1).replace("set 1", "set 2")))
+
+
+class Forum(unittest.TestCase):
+    @staticmethod
+    def row(did, last, title, subscribed=True):
+        return (f'<tr class="discussion{" subscribed" if subscribed else ""}" data-discussionid="{did}">'
+                f'<th class="topic"><a href="https://x/mod/forum/discuss.php?d={did}">{title}</a></th>'
+                f'<td><a href="https://x/mod/forum/discuss.php?d={did}&amp;parent={last}">t</a></td></tr>')
+
+    class FakeMoodle:
+        def __init__(self, page):
+            self.page = page
+
+        def get(self, url):
+            body = self.page if "view.php" in url else '<article id="p9"><header>T by PROF</header>' \
+                '<div class="post-content-container">Hello</div></article>'
+            return type("R", (), {"text": f'<div id="region-main"><table>{body}</table></div>'})()
+
+    def run_check(self, state, rows):
+        item = dict(key="forum1", url="https://x/mod/forum/view.php?id=1", name="Notice board")
+        A.check_forum(self.FakeMoodle("".join(rows)), item, {"name": "RL"}, state)
+        return state.get("pending_posts", {}).get("mail", [])
+
+    def test_first_look_is_silent_then_only_unsubscribed_posts(self):
+        state = {}
+        self.assertEqual(self.run_check(state, [self.row(1, 5, "old")]), [])
+        rows = [self.row(1, 5, "old"), self.row(2, 7, "emailed by Moodle"), self.row(3, 9, "not emailed", False)]
+        posts = self.run_check(state, rows)
+        self.assertEqual([p["title"] for p in posts], ["not emailed"])
+        self.assertEqual(posts[0]["text"], "Hello")
+        self.assertEqual(len(self.run_check(state, rows)), 1)  # nothing new: queue unchanged, no repeat
+
+
 class Schedule(unittest.TestCase):
     ICS = ("BEGIN:VCALENDAR\r\nX-WR-TIMEZONE:Europe/Madrid\r\n"
            "BEGIN:VEVENT\r\nDTSTART:20261022T113000\r\nSUMMARY:Symbolic reasoning\r\nEND:VEVENT\r\n"

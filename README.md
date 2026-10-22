@@ -13,7 +13,8 @@ Aula Global has the Moodle mobile web service turned off (`enablemobilewebservic
 
 ## What gets synced
 - **Included:** course files (resources), folders, files embedded in labels, and assignments: the brief (`brief_auto.html`), its attachments, your submission (`submission/`) and the feedback (`feedback/`, `feedback_auto.html`).
-- **Skipped:** forums, links, quizzes, Kaltura videos, books, pages, and video files.
+- **Forums (notice boards):** checked for new posts, not downloaded; see Notifications.
+- **Skipped:** links, quizzes, Kaltura videos, books, pages, and video files.
 
 Files land in `<destination>/<course folder>/<type>/<name>_auto.<ext>`:
 
@@ -54,6 +55,7 @@ The type folders are `slides`, `readings`, `exercises`, `assignments/<name>`, `c
    | `destination` | folder for the synced files (`~` allowed); create it first | `"~/Library/Mobile Documents/com~apple~CloudDocs/Aula Global"` |
    | `sync_windows` | optional: `[from, to, every_minutes]` in local time, both ends included; no syncs outside them (default: every 30 min 08:00–16:00, every 2 h 16:00–20:00) | `[["08:00", "16:00", 30], ["16:00", "20:00", 120]]` |
    | `calendar_url` | optional: iCalendar feed of your timetable; a sync also runs at each lecture start | `"https://…/upf.ics"` |
+   | `forum_alerts` | optional: which new forum posts to alert about: `"unsubscribed"` (default: only posts Moodle won't email you itself), `"all"`, or `"off"` | `"unsubscribed"` |
    | `lecture_offsets_minutes` | optional: minutes after each lecture start to sync (default `[0, 15]`; negative = before) | `[0, 15]` |
 
 3. **Store your UPF password and TOTP secret in Keychain.** Pick one:
@@ -87,7 +89,8 @@ The type folders are `slides`, `readings`, `exercises`, `assignments/<name>`, `c
    The dry run also writes `courses.json` with an automatic folder name for each course. Edit it before installing if you like (see *Courses* below).
 
 ## Notifications
-- **New or updated files:** one message after each run that found something, grouped by course and type (an HTML email plus a plain-text ntfy push). No changes, no message.
+- **New or updated files:** one message after each run that found something, grouped by course and type (an HTML email plus a plain-text ntfy push). No changes, no message. A saved page (assignment `brief.html`, `feedback.html`) counts as changed only when its visible text or links change, not when Moodle re-renders its markup.
+- **Forum posts:** Moodle already emails you every post in a discussion you're subscribed to (notice boards are subscribed by default). Each run checks every course forum and alerts you once about a new post Moodle won't email you, with its text and a link. The first check of a forum only records the posts already there. `forum_alerts` changes the rule.
 - **Problems:** you get an alert for a login failure (e.g. you changed your password or re-enrolled 2FA), a crash, the disk guard, or 48 h without a successful run because of the network. Each kind of problem is reported at most once per 24 h.
 - **Queues:** email and ntfy keep separate queues, so a channel that is down or not set up yet catches up later.
 
@@ -140,7 +143,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m unittest discover -s tests
 .venv/bin/python upf_login.py U123456          # login test only
 ```
-The tests cover naming, categorisation, subfolder overrides, dedupe, the no-overwrite rules, email rendering and the atomic move.
+The tests cover naming, categorisation, subfolder overrides, dedupe, the no-overwrite rules, email rendering, the atomic move, page change detection, forum alerts and the schedule.
 
 ## License
 MIT

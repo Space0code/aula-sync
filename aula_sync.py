@@ -67,6 +67,9 @@ SYNC_WINDOWS = SETTINGS.get("sync_windows", [["08:00", "16:00", 30], ["16:00", "
 CALENDAR_URL = SETTINGS.get("calendar_url", "")
 LECTURE_OFFSETS = SETTINGS.get("lecture_offsets_minutes", [0, 15])
 CAL_REFRESH = 6 * 3600
+# forum posts (notice boards): "unsubscribed" = alert only for posts Moodle itself won't email you
+# (discussions you're not subscribed to), "all" = every new post, "off" = never
+FORUM_ALERTS = SETTINGS.get("forum_alerts", "unsubscribed")
 SUFFIX = "_auto"
 SPACING = 0.3            # seconds between requests
 MAX_RUN_BYTES = 3 * 1024**3
@@ -75,7 +78,7 @@ ERROR_MAIL_EVERY = 24 * 3600
 NETWORK_MAIL_AFTER = 48 * 3600
 SF_DATALESS = 0x40000000  # iCloud file evicted from local disk
 
-SKIP_MODULES = {"forum", "url", "page", "quiz", "kalvidres", "kalvidassign", "hvp", "h5pactivity", "book",
+SKIP_MODULES = {"url", "page", "quiz", "kalvidres", "kalvidassign", "hvp", "h5pactivity", "book",
                 "lti", "choice", "feedback", "chat", "zoom", "bigbluebuttonbn", "subsection", "workshop", "glossary"}
 VIDEO_EXT = {"mp4", "mov", "m4v", "webm", "mkv", "avi", "wmv", "flv", "mpeg", "mpg"}
 CATEGORY_EXT = {
@@ -306,6 +309,8 @@ def discover(m, course, ccfg):
                            filename=os.path.basename(rel), kind="file")
         elif mod == "assign":
             yield from discover_assign(m, cm, name)
+        elif mod == "forum":
+            yield dict(key=f"forum{cm['id']}", url=cm["url"], module=mod, name=name, kind="forum")
         else:
             log.info("skip unknown module %s (%s) in %s", mod, name, course["shortname"])
     # files embedded in labels / section summaries (not blocks, not user icons)
@@ -359,6 +364,15 @@ def discover_assign(m, cm, name):
     if fb is not None and fb.get_text(strip=True):
         yield dict(base, key=f"cm{cm['id']}:feedback", kind="html", filename="feedback.html", subdir=adir,
                    html=html_doc(f"{name} - feedback", str(fb)), source=cm["url"])
+
+
+def html_fingerprint(html):
+    """Hash of what a saved page shows: its text and link targets. Ignores markup that Moodle regenerates on
+    every load (random element ids such as assign_files_tree<uniqid>, theme revision numbers)."""
+    soup = BeautifulSoup(html, "html.parser")
+    text = " ".join(soup.get_text(" ").split())
+    links = sorted(strip_query(a["href"]) for a in soup.find_all("a", href=True))
+    return "fp1:" + hashlib.sha256("\n".join([text] + links).encode()).hexdigest()
 
 
 def html_doc(title, body):
@@ -415,9 +429,12 @@ def sync_item(m, item, cfolder, ccfg, state, index, dry, disk, changes):
     rec = state["files"].get(key)
     if item["kind"] == "html":
         body = item["html"].encode()
-        digest = hashlib.sha256(re.sub(rb"\s+", b" ", body)).hexdigest()
+        digest = html_fingerprint(item["html"])
         dst = target_path(item, cfolder, ccfg, item["filename"])
         if rec and rec.get("version") == digest:
+            return
+        if rec and not rec.get("version", "").startswith("fp1:"):
+            rec["version"] = digest  # saved with the old raw-HTML hash: adopt silently, don't report a change
             return
         if dry:
             changes.append(("new" if not rec else "updated", dst, len(body)))
@@ -432,6 +449,7 @@ def sync_item(m, item, cfolder, ccfg, state, index, dry, disk, changes):
         state["files"][key] = dict(version=digest, path=os.path.relpath(dst, DEST), size=len(body),
                                    sha256=hashlib.sha256(body).hexdigest(), time=time.time())
         changes.append(("new" if not rec else "updated", dst, len(body)))
+        log.info("%s %s (%d bytes)", "new" if not rec else "updated", dst, len(body))
         return
 
     r = m.get(item["url"], stream=True)
@@ -507,6 +525,88 @@ def sync_item(m, item, cfolder, ccfg, state, index, dry, disk, changes):
         r.close()
 
 
+def forum_rows(html):
+    """Discussions listed on a forum page: id, id of its latest post, title, subscribed, url."""
+    soup = BeautifulSoup(html, "html.parser")
+    for r in (soup.find(id="region-main") or soup).select("tr.discussion"):
+        topic = r.select_one("th.topic a")
+        last = r.select_one("a[href*='parent=']")
+        if not topic:
+            continue
+        yield dict(id=r["data-discussionid"], last=last["href"].rsplit("parent=", 1)[1] if last else "",
+                   title=topic.get_text(strip=True), subscribed="subscribed" in r.get("class", []),
+                   url=f"{L.BASE}/mod/forum/discuss.php?d={r['data-discussionid']}")
+
+
+def post_body(m, d):
+    """(header, text) of the latest post of discussion d."""
+    soup = BeautifulSoup(m.get(d["url"]).text, "html.parser")
+    art = soup.find("article", id=f"p{d['last']}") or (soup.select("article[id^=p]") or [None])[-1]
+    if art is None:
+        return d["title"], ""
+    head, body = art.select_one("header"), art.select_one(".post-content-container")
+    return (" ".join(head.get_text(" ", strip=True).split()) if head else d["title"],
+            body.get_text("\n", strip=True) if body else "")
+
+
+def check_forum(m, item, ccfg, state):
+    """Queue new forum posts in state (saved with the course, so none is lost if the run fails later).
+    The first look at a forum only records what is there (no backlog alerts)."""
+    if FORUM_ALERTS == "off":
+        return
+    forums = state.setdefault("forums", {})
+    first = item["key"] not in forums
+    known = forums.setdefault(item["key"], {})
+    for d in forum_rows(m.get(item["url"]).text):
+        if known.get(d["id"]) == d["last"]:
+            continue
+        known[d["id"]] = d["last"]
+        if first or (d["subscribed"] and FORUM_ALERTS != "all"):
+            continue  # Moodle emails posts of subscribed discussions itself
+        head, text = post_body(m, d)
+        post = dict(course=ccfg["name"], forum=item["name"], title=d["title"], head=head, text=text,
+                    url=f"{d['url']}#p{d['last']}")
+        for ch in CHANNELS:
+            state.setdefault("pending_posts", {}).setdefault(ch, []).append(post)
+        log.info("new post in %s / %s: %s", ccfg["name"], item["name"], d["title"])
+
+
+def posts_subject(posts):
+    if len(posts) == 1:
+        return f"📣 {posts[0]['course']}: {posts[0]['title']}"
+    return f"📣 {len(posts)} new forum posts on Aula Global · " + ", ".join(dict.fromkeys(p["course"] for p in posts))
+
+
+def posts_text(posts):
+    return "\n\n".join(f"{p['course']} · {p['forum']}\n{p['head']}\n{p['url']}\n\n{p['text']}" for p in posts)
+
+
+def posts_html(posts):
+    e = htmllib.escape
+    return ('<div style="font:15px -apple-system,sans-serif;max-width:620px">' + "".join(
+        f'<div style="margin:0 0 22px"><div style="font-size:12px;color:#8a8378;text-transform:uppercase;'
+        f'letter-spacing:.06em">{e(p["course"])} · {e(p["forum"])}</div>'
+        f'<div style="font-size:17px;font-weight:700;margin:4px 0"><a href="{e(p["url"])}">{e(p["title"])}</a></div>'
+        f'<div style="font-size:13px;color:#8a8378;margin-bottom:8px">{e(p["head"])}</div>'
+        f'<div style="white-space:pre-wrap">{e(p["text"])}</div></div>' for p in posts) + "</div>")
+
+
+def notify_posts(state):
+    """Send queued forum posts on every ready channel; a channel that fails keeps its queue for the next run."""
+    for ch, send in CHANNELS.items():
+        q = state.setdefault("pending_posts", {}).get(ch)
+        if not q or not channel_ready(ch):
+            continue
+        try:
+            if ch == "mail":
+                send(posts_subject(q), posts_text(q), html=posts_html(q))
+            else:
+                send(posts_subject(q), posts_text(q), tags="loudspeaker")
+            state["pending_posts"][ch] = []
+        except Exception as e:
+            log.error("%s post notification not sent (kept for next run): %s", ch, e)
+
+
 class DiskGuard(Exception):
     pass
 
@@ -550,6 +650,9 @@ def run(dry=False):
             cl = changes.setdefault(ccfg["name"], [])
             for item in discover(m, course, ccfg):
                 try:
+                    if item["kind"] == "forum":
+                        check_forum(m, item, ccfg, state)
+                        continue
                     sync_item(m, item, ccfg["folder"], ccfg, state, index, dry, disk, cl)
                 except (DiskGuard, L.AuthError):
                     raise
@@ -575,6 +678,7 @@ def run(dry=False):
                 for course, items in changes.items():
                     q.setdefault(course, []).extend([s, os.path.relpath(p, DEST), n] for s, p, n in items)
             save_json(STATE, state)
+            notify_posts(state)
             for ch, send in CHANNELS.items():
                 q = queues[ch]
                 if not q or not channel_ready(ch):

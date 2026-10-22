@@ -4,5 +4,6 @@
  "destination": "~/Library/Mobile Documents/com~apple~CloudDocs/Aula Global",
  "sync_windows": [["08:00", "16:00", 30], ["16:00", "20:00", 120]],
  "calendar_url": "",
- "lecture_offsets_minutes": [0, 15]
+ "lecture_offsets_minutes": [0, 15],
+ "forum_alerts": "unsubscribed"
 }
