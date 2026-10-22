@@ -3,6 +3,8 @@
 
 Usage:
   aula_sync.py run [--dry-run]   sync (dry run: list what would be downloaded, with sizes)
+  aula_sync.py tick              sync if due (sync window slot or lecture start); launchd calls this every 5 min
+  aula_sync.py schedule          print the sync windows and the next sync times
   aula_sync.py test-email        send a test email
   aula_sync.py courses           print the enrolled courses and their folder mapping
 """
@@ -25,6 +27,7 @@ import time
 import traceback
 import urllib.parse
 from email.message import EmailMessage
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import upf_login as L  # noqa: E402
@@ -39,6 +42,8 @@ LOG_DIR = os.path.join(HOME, "Library/Logs/aula-sync")
 STATE = os.path.join(APP_DIR, "state.json")
 COOKIES = os.path.join(APP_DIR, "cookies.pkl")
 CONFIG = os.path.join(APP_DIR, "courses.json")
+SCHEDULE = os.path.join(APP_DIR, "schedule.json")
+CAL_CACHE = os.path.join(APP_DIR, "calendar.ics")
 SETTINGS_FILE = os.path.join(APP_DIR, "settings.json")
 
 
@@ -55,6 +60,13 @@ SETTINGS = _load_settings()
 DEST = os.path.expanduser(SETTINGS.get("destination") or os.path.join(ICLOUD, "Aula Global"))
 UPF_USER = os.environ.get("AULA_SYNC_UPF_USER") or SETTINGS.get("upf_user", "")
 MAIL_TO = MAIL_FROM = SETTINGS.get("email", "")  # Gmail address; empty disables email
+# schedule: launchd calls `tick` every 5 min; tick syncs when a slot has passed since the last sync. Slots are
+# sync_windows ([from, to, every_minutes], local time, both ends included; none outside them, e.g. at night)
+# and lecture starts in the calendar_url feed shifted by lecture_offsets_minutes (0 = at start)
+SYNC_WINDOWS = SETTINGS.get("sync_windows", [["08:00", "16:00", 30], ["16:00", "20:00", 120]])
+CALENDAR_URL = SETTINGS.get("calendar_url", "")
+LECTURE_OFFSETS = SETTINGS.get("lecture_offsets_minutes", [0, 15])
+CAL_REFRESH = 6 * 3600
 SUFFIX = "_auto"
 SPACING = 0.3            # seconds between requests
 MAX_RUN_BYTES = 3 * 1024**3
@@ -852,17 +864,113 @@ def error_mail(state, kind, text):
         state["mail"][kind] = time.time()
 
 
+# ---------------------------------------------------------------- schedule
+def lecture_starts(ics):
+    """Start times (aware) of the timed events in an iCalendar feed; all-day events (holidays) are skipped."""
+    default_tz = re.search(r"^X-WR-TIMEZONE:(.+)$", ics, re.M)
+    default_tz = default_tz.group(1).strip() if default_tz else "Europe/Madrid"
+    out = []
+    for m in re.finditer(r"^DTSTART((?:;[^:\r\n]*)?):(\d{8}T\d{6})(Z?)\s*$", ics, re.M):
+        params, stamp, utc = m.groups()
+        tz = re.search(r";TZID=([^;]+)", params)
+        tz = dt.timezone.utc if utc else ZoneInfo(tz.group(1) if tz else default_tz)
+        out.append(dt.datetime.strptime(stamp, "%Y%m%dT%H%M%S").replace(tzinfo=tz))
+    return sorted(out)
+
+
+def calendar_text():
+    """The calendar feed, refreshed every CAL_REFRESH; falls back to the cached copy when offline."""
+    if not CALENDAR_URL:
+        return ""
+    fresh = os.path.exists(CAL_CACHE) and time.time() - os.path.getmtime(CAL_CACHE) < CAL_REFRESH
+    if not fresh:
+        try:
+            r = requests.get(CALENDAR_URL.replace("webcal://", "https://", 1), timeout=30)
+            r.raise_for_status()
+            if "BEGIN:VCALENDAR" in r.text:
+                with open(CAL_CACHE + ".tmp", "w") as f:
+                    f.write(r.text)
+                os.replace(CAL_CACHE + ".tmp", CAL_CACHE)
+        except Exception as e:
+            log.warning("calendar not refreshed (using cache): %s", e)
+    try:
+        with open(CAL_CACHE) as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
+
+
+def lecture_triggers(ics):
+    return sorted(t + dt.timedelta(minutes=o) for t in lecture_starts(ics) for o in LECTURE_OFFSETS)
+
+
+def window_slots(day, windows=None):
+    """Local-time sync slots on `day` (a date) from sync_windows."""
+    out = set()
+    for start, end, every in windows or SYNC_WINDOWS:
+        t, stop = (dt.datetime.combine(day, dt.time.fromisoformat(x)).astimezone() for x in (start, end))
+        while t <= stop:
+            out.add(t)
+            t += dt.timedelta(minutes=every)
+    return sorted(out)
+
+
+def triggers_around(now, ics):
+    """(time, kind) of every slot from yesterday to tomorrow, so a run missed while asleep is caught up."""
+    today = now.astimezone().date()
+    days = [today + dt.timedelta(days=d) for d in (-1, 0, 1)]
+    return sorted([(t, "slot") for d in days for t in window_slots(d)] + [(t, "lecture") for t in lecture_triggers(ics)])
+
+
+def due(now, last, triggers):
+    """Why a sync is due at `now` (aware datetimes; last may be None), or None."""
+    if last is None:
+        return "first run"
+    for t, kind in triggers:
+        if last < t <= now:
+            return f"{kind} {t.astimezone():%a %H:%M}"
+    return None
+
+
+def tick():
+    sched = load_json(SCHEDULE, {})
+    now = dt.datetime.now(dt.timezone.utc)
+    last = dt.datetime.fromtimestamp(sched["last_run"], dt.timezone.utc) if "last_run" in sched else None
+    reason = due(now, last, triggers_around(now, calendar_text()))
+    if not reason:
+        return
+    log.info("sync due: %s", reason)
+    sched["last_run"] = now.timestamp()  # an attempt counts, so a failing run is retried next slot, not every tick
+    save_json(SCHEDULE, sched)
+    run()
+
+
+def print_schedule():
+    now = dt.datetime.now(dt.timezone.utc)
+    print(", ".join(f"{a}-{b} every {m} min" for a, b, m in SYNC_WINDOWS)
+          + f"; lecture start {LECTURE_OFFSETS} min ({CALENDAR_URL or 'no calendar_url set'})")
+    sched = load_json(SCHEDULE, {})
+    if "last_run" in sched:
+        print(f"last scheduled sync: {dt.datetime.fromtimestamp(sched['last_run']):%a %d %b %H:%M}")
+    for t, kind in [x for x in triggers_around(now, calendar_text()) if x[0] > now][:30]:
+        print(f"  {t.astimezone():%a %d %b %H:%M}  {kind}")
+
+
 # ---------------------------------------------------------------- cli
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["run", "test-email", "test-ntfy", "courses"])
+    ap.add_argument("cmd", choices=["run", "tick", "schedule", "test-email", "test-ntfy", "courses"])
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--with-error", action="store_true", help="test-email: also send a sample error alert")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
-    setup_logging(a.verbose or a.cmd != "run" or a.dry_run)
+    setup_logging(a.verbose or a.cmd not in ("run", "tick") or a.dry_run)
     if a.cmd == "run":
         run(dry=a.dry_run)
+    elif a.cmd == "tick":
+        tick()
+    elif a.cmd == "schedule":
+        print_schedule()
     elif a.cmd == "test-email":
         q, config = sample_queue()
         text = changes_text({c: [(s, os.path.join(DEST, p), n) for s, p, n in v] for c, v in q.items()})

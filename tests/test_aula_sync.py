@@ -127,5 +127,34 @@ class AtomicPlace(unittest.TestCase):
             self.assertEqual(open(f"{d}/a/b/f_auto.txt").read(), "new")
 
 
+class Schedule(unittest.TestCase):
+    ICS = ("BEGIN:VCALENDAR\r\nX-WR-TIMEZONE:Europe/Madrid\r\n"
+           "BEGIN:VEVENT\r\nDTSTART:20261022T113000\r\nSUMMARY:Symbolic reasoning\r\nEND:VEVENT\r\n"
+           "BEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20261101\r\nSUMMARY:Holiday\r\nEND:VEVENT\r\n"
+           "BEGIN:VEVENT\r\nDTSTART:20261023T080000Z\r\nSUMMARY:x\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+
+    def test_lecture_starts(self):
+        utc = [t.astimezone(A.dt.timezone.utc).strftime("%d %H:%M") for t in A.lecture_starts(self.ICS)]
+        self.assertEqual(utc, ["22 09:30", "23 08:00"])  # Madrid is UTC+2 in October; all-day skipped
+
+    def test_window_slots(self):
+        slots = [t.strftime("%H:%M") for t in A.window_slots(A.dt.date(2026, 10, 22),
+                                                              [["08:00", "16:00", 30], ["16:00", "20:00", 120]])]
+        self.assertEqual(slots[:3], ["08:00", "08:30", "09:00"])
+        self.assertEqual(slots[-5:], ["15:00", "15:30", "16:00", "18:00", "20:00"])
+        self.assertEqual(len(slots), 19)
+
+    def test_due(self):
+        utc = A.dt.timezone.utc
+        t = A.dt.datetime(2026, 10, 22, 9, 30, tzinfo=utc)
+        m = A.dt.timedelta(minutes=1)
+        trig = [(t, "lecture")]
+        self.assertEqual(A.due(t, None, []), "first run")
+        self.assertIsNone(A.due(t, t - 10 * m, []))
+        self.assertTrue(A.due(t + 2 * m, t - 10 * m, trig).startswith("lecture"))
+        self.assertIsNone(A.due(t + 2 * m, t + m, trig))  # already synced after that slot
+        self.assertIsNone(A.due(t + 600 * m, t + m, trig))  # no slot since: night stays quiet
+
+
 if __name__ == "__main__":
     unittest.main()

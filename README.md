@@ -2,7 +2,7 @@
 
 Unattended sync of your **UPF Aula Global** (Moodle) course files and assignments into a folder on your Mac, by default in iCloud Drive so the files also reach your iPad and iPhone. When new files arrive, you get a short summary by email and/or ntfy push.
 
-> Unofficial tool. It logs in as you, with your own UPF account, and only downloads what you can already see in the browser. Requests are spaced out and it runs every 6 hours.
+> Unofficial tool. It logs in as you, with your own UPF account, and only downloads what you can already see in the browser. Requests are spaced out and it syncs every 30 minutes in the daytime (configurable) and at each lecture start.
 
 ## Why not moodle-dl?
 Aula Global has the Moodle mobile web service turned off (`enablemobilewebservice: 0`, and `admin/tool/mobile/launch.php` returns 404), so there is no token for moodle-dl or the Moodle app. `aula_sync.py` logs in like a browser instead:
@@ -52,6 +52,9 @@ The type folders are `slides`, `readings`, `exercises`, `assignments/<name>`, `c
    | `upf_user` | the user code you type on the UPF login page (not your email) | `"U123456"` |
    | `email` | Gmail address that sends and receives the alerts; `""` turns email off | `"you@gmail.com"` |
    | `destination` | folder for the synced files (`~` allowed); create it first | `"~/Library/Mobile Documents/com~apple~CloudDocs/Aula Global"` |
+   | `sync_windows` | optional: `[from, to, every_minutes]` in local time, both ends included; no syncs outside them (default: every 30 min 08:00–16:00, every 2 h 16:00–20:00) | `[["08:00", "16:00", 30], ["16:00", "20:00", 120]]` |
+   | `calendar_url` | optional: iCalendar feed of your timetable; a sync also runs at each lecture start | `"https://…/upf.ics"` |
+   | `lecture_offsets_minutes` | optional: minutes after each lecture start to sync (default `[0, 15]`; negative = before) | `[0, 15]` |
 
 3. **Store your UPF password and TOTP secret in Keychain.** Pick one:
    - **The code comes from Apple Passwords** (the Passwords app or iCloud Keychain fills it in):
@@ -98,7 +101,8 @@ New enrolments are picked up automatically. Each course gets a snake_case folder
 
 ## What runs where
 Everything runs on your Mac, as the launchd agent `local.aula-sync`:
-- It runs every 6 h and at login. A run that was due while the Mac slept fires once on wake.
+- launchd starts `aula_sync.py tick` every 5 min and at login. The tick syncs only when a slot has passed since the last sync: a `sync_windows` time (08:00, 08:30, … 16:00, 18:00, 20:00 by default) or a lecture start from `calendar_url` plus `lecture_offsets_minutes`; otherwise it exits at once. Nothing runs at night. The feed is cached in `calendar.ics` and refreshed every 6 h. A slot missed while the Mac slept is caught up once on wake.
+- Changing `sync_windows`, `calendar_url` or `lecture_offsets_minutes` takes effect at the next tick; no reinstall needed. `aula_sync.py schedule` prints the windows and the next sync times.
 - It runs at `nice 19` with low-priority I/O, as a single process with 0.3 s between requests.
 
 | What | Where |
@@ -115,6 +119,7 @@ Everything runs on your Mac, as the launchd agent `local.aula-sync`:
 APP="$HOME/Library/Application Support/aula-sync/app"
 "$APP/.venv/bin/python" "$APP/aula_sync.py" run -v              # sync now, verbose
 "$APP/.venv/bin/python" "$APP/aula_sync.py" run --dry-run       # what would be downloaded
+"$APP/.venv/bin/python" "$APP/aula_sync.py" schedule            # interval and next lecture triggers
 "$APP/.venv/bin/python" "$APP/aula_sync.py" courses             # courses and folder mapping
 "$APP/.venv/bin/python" "$APP/aula_sync.py" test-email --with-error
 "$APP/.venv/bin/python" "$APP/aula_sync.py" test-ntfy
