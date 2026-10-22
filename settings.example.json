@@ -1,5 +1,8 @@
 {
  "upf_user": "U123456",
  "email": "you@gmail.com",
- "destination": "~/Library/Mobile Documents/com~apple~CloudDocs/Aula Global"
+ "destination": "~/Library/Mobile Documents/com~apple~CloudDocs/Aula Global",
+ "interval_minutes": 30,
+ "calendar_url": "",
+ "lecture_offsets_minutes": [0, 15]
 }

@@ -8,11 +8,12 @@
   <array>
     <string>__APP__/.venv/bin/python</string>
     <string>__APP__/aula_sync.py</string>
-    <string>run</string>
+    <string>tick</string>
   </array>
-  <!-- every 6 h; a slot missed while asleep fires once on wake; RunAtLoad covers login -->
+  <!-- tick every 5 min; it syncs only when due (interval_minutes / lecture starts in settings.json).
+       A tick missed while asleep fires once on wake; RunAtLoad covers login -->
   <key>StartInterval</key>
-  <integer>21600</integer>
+  <integer>300</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>ProcessType</key>

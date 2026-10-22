@@ -127,5 +127,26 @@ class AtomicPlace(unittest.TestCase):
             self.assertEqual(open(f"{d}/a/b/f_auto.txt").read(), "new")
 
 
+class Schedule(unittest.TestCase):
+    ICS = ("BEGIN:VCALENDAR\r\nX-WR-TIMEZONE:Europe/Madrid\r\n"
+           "BEGIN:VEVENT\r\nDTSTART:20261022T113000\r\nSUMMARY:Symbolic reasoning\r\nEND:VEVENT\r\n"
+           "BEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20261101\r\nSUMMARY:Holiday\r\nEND:VEVENT\r\n"
+           "BEGIN:VEVENT\r\nDTSTART:20261023T080000Z\r\nSUMMARY:x\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+
+    def test_lecture_starts(self):
+        utc = [t.astimezone(A.dt.timezone.utc).strftime("%d %H:%M") for t in A.lecture_starts(self.ICS)]
+        self.assertEqual(utc, ["22 09:30", "23 08:00"])  # Madrid is UTC+2 in October; all-day skipped
+
+    def test_due(self):
+        utc = A.dt.timezone.utc
+        t = A.dt.datetime(2026, 10, 22, 9, 30, tzinfo=utc)
+        m = A.dt.timedelta(minutes=1)
+        self.assertEqual(A.due(t, None, []), "interval")
+        self.assertIsNone(A.due(t, t - 10 * m, []))
+        self.assertEqual(A.due(t, t - 30 * m, []), "interval")
+        self.assertTrue(A.due(t + 2 * m, t - 10 * m, [t]).startswith("lecture"))
+        self.assertIsNone(A.due(t + 2 * m, t + m, [t]))  # already synced after that lecture start
+
+
 if __name__ == "__main__":
     unittest.main()
