@@ -34,4 +34,4 @@ sed -e "s|__APP__|$APP|g" -e "s|__HOME__|$HOME|g" "$SRC/launchd/$LABEL.plist" > 
 plutil -lint "$PLIST" >/dev/null
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
-echo "installed: $APP; agent $LABEL loaded (syncs now, then every interval_minutes and at lecture starts; see settings.json)"
+echo "installed: $APP; agent $LABEL loaded (syncs now, then in sync_windows and at lecture starts; see settings.json)"

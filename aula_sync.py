@@ -3,8 +3,8 @@
 
 Usage:
   aula_sync.py run [--dry-run]   sync (dry run: list what would be downloaded, with sizes)
-  aula_sync.py tick              sync if due (interval or lecture start); launchd calls this every 5 min
-  aula_sync.py schedule          print the sync interval and the next lecture triggers
+  aula_sync.py tick              sync if due (sync window slot or lecture start); launchd calls this every 5 min
+  aula_sync.py schedule          print the sync windows and the next sync times
   aula_sync.py test-email        send a test email
   aula_sync.py courses           print the enrolled courses and their folder mapping
 """
@@ -60,9 +60,10 @@ SETTINGS = _load_settings()
 DEST = os.path.expanduser(SETTINGS.get("destination") or os.path.join(ICLOUD, "Aula Global"))
 UPF_USER = os.environ.get("AULA_SYNC_UPF_USER") or SETTINGS.get("upf_user", "")
 MAIL_TO = MAIL_FROM = SETTINGS.get("email", "")  # Gmail address; empty disables email
-# schedule: launchd calls `tick` every 5 min; tick syncs when interval_minutes have passed since the last
-# sync, or when a lecture in the calendar_url feed started lecture_offsets_minutes ago (0 = at start)
-INTERVAL_MIN = float(SETTINGS.get("interval_minutes", 30))
+# schedule: launchd calls `tick` every 5 min; tick syncs when a slot has passed since the last sync. Slots are
+# sync_windows ([from, to, every_minutes], local time, both ends included; none outside them, e.g. at night)
+# and lecture starts in the calendar_url feed shifted by lecture_offsets_minutes (0 = at start)
+SYNC_WINDOWS = SETTINGS.get("sync_windows", [["08:00", "16:00", 30], ["16:00", "20:00", 120]])
 CALENDAR_URL = SETTINGS.get("calendar_url", "")
 LECTURE_OFFSETS = SETTINGS.get("lecture_offsets_minutes", [0, 15])
 CAL_REFRESH = 6 * 3600
@@ -903,13 +904,31 @@ def lecture_triggers(ics):
     return sorted(t + dt.timedelta(minutes=o) for t in lecture_starts(ics) for o in LECTURE_OFFSETS)
 
 
+def window_slots(day, windows=None):
+    """Local-time sync slots on `day` (a date) from sync_windows."""
+    out = set()
+    for start, end, every in windows or SYNC_WINDOWS:
+        t, stop = (dt.datetime.combine(day, dt.time.fromisoformat(x)).astimezone() for x in (start, end))
+        while t <= stop:
+            out.add(t)
+            t += dt.timedelta(minutes=every)
+    return sorted(out)
+
+
+def triggers_around(now, ics):
+    """(time, kind) of every slot from yesterday to tomorrow, so a run missed while asleep is caught up."""
+    today = now.astimezone().date()
+    days = [today + dt.timedelta(days=d) for d in (-1, 0, 1)]
+    return sorted([(t, "slot") for d in days for t in window_slots(d)] + [(t, "lecture") for t in lecture_triggers(ics)])
+
+
 def due(now, last, triggers):
     """Why a sync is due at `now` (aware datetimes; last may be None), or None."""
-    if last is None or (now - last).total_seconds() >= INTERVAL_MIN * 60:
-        return "interval"
-    for t in triggers:
+    if last is None:
+        return "first run"
+    for t, kind in triggers:
         if last < t <= now:
-            return f"lecture trigger {t.astimezone():%a %H:%M}"
+            return f"{kind} {t.astimezone():%a %H:%M}"
     return None
 
 
@@ -917,7 +936,7 @@ def tick():
     sched = load_json(SCHEDULE, {})
     now = dt.datetime.now(dt.timezone.utc)
     last = dt.datetime.fromtimestamp(sched["last_run"], dt.timezone.utc) if "last_run" in sched else None
-    reason = due(now, last, lecture_triggers(calendar_text()))
+    reason = due(now, last, triggers_around(now, calendar_text()))
     if not reason:
         return
     log.info("sync due: %s", reason)
@@ -928,13 +947,13 @@ def tick():
 
 def print_schedule():
     now = dt.datetime.now(dt.timezone.utc)
-    print(f"every {INTERVAL_MIN:g} min, plus lecture start {LECTURE_OFFSETS} min "
-          f"({CALENDAR_URL or 'no calendar_url set'})")
+    print(", ".join(f"{a}-{b} every {m} min" for a, b, m in SYNC_WINDOWS)
+          + f"; lecture start {LECTURE_OFFSETS} min ({CALENDAR_URL or 'no calendar_url set'})")
     sched = load_json(SCHEDULE, {})
     if "last_run" in sched:
         print(f"last scheduled sync: {dt.datetime.fromtimestamp(sched['last_run']):%a %d %b %H:%M}")
-    for t in [t for t in lecture_triggers(calendar_text()) if t > now][:10]:
-        print(f"  lecture trigger {t.astimezone():%a %d %b %H:%M}")
+    for t, kind in [x for x in triggers_around(now, calendar_text()) if x[0] > now][:30]:
+        print(f"  {t.astimezone():%a %d %b %H:%M}  {kind}")
 
 
 # ---------------------------------------------------------------- cli

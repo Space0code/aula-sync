@@ -2,7 +2,7 @@
  "upf_user": "U123456",
  "email": "you@gmail.com",
  "destination": "~/Library/Mobile Documents/com~apple~CloudDocs/Aula Global",
- "interval_minutes": 30,
+ "sync_windows": [["08:00", "16:00", 30], ["16:00", "20:00", 120]],
  "calendar_url": "",
  "lecture_offsets_minutes": [0, 15]
 }
