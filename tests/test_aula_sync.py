@@ -140,6 +140,48 @@ class HtmlFingerprint(unittest.TestCase):
                             A.html_fingerprint(self.PAGE.format("a", 1).replace("set 1", "set 2")))
 
 
+class AssignmentBrief(unittest.TestCase):
+    def test_discover_assign_yields_attachments_but_no_brief(self):
+        page = ('<div id="region-main"><div class="activity-dates">Due: Friday</div><div id="intro">Do it'
+                '<a href="https://aulaglobal.upf.edu/pluginfile.php/1/mod_assign/introattachment/0/p1.pdf?forcedownload=1">'
+                'p1.pdf</a></div></div>')
+        m = type("M", (), {"get": lambda self, url: type("R", (), {"text": page})()})()
+        items = list(A.discover_assign(m, {"id": 7, "url": "https://x/mod/assign/view.php?id=7"}, "PS 1"))
+        self.assertEqual([i["filename"] for i in items], ["p1.pdf"])
+
+    def test_drop_assignment_briefs(self):
+        with tempfile.TemporaryDirectory() as d:
+            old, A.DEST = A.DEST, d
+            try:
+                os.makedirs(f"{d}/c/assignments/only brief")
+                os.makedirs(f"{d}/c/assignments/with files")
+                for p in ("c/assignments/only brief/brief_auto.html", "c/assignments/with files/brief_auto (2).html",
+                          "c/assignments/with files/p1_auto.pdf", "c/assignments/with files/brief.html"):
+                    with open(f"{d}/{p}", "w") as f:
+                        f.write("x")
+                state = {"files": {
+                    "1:cm1:brief": {"path": "c/assignments/only brief/brief_auto.html"},
+                    "1:cm2:brief": {"path": "c/assignments/with files/brief_auto (2).html"},
+                    "1:cm3:brief": {"path": "c/assignments/with files/brief.html"},  # not ours: kept on disk
+                    "1:cm2:p1": {"path": "c/assignments/with files/p1_auto.pdf"}}}
+                A.drop_assignment_briefs(state)
+                self.assertEqual(list(state["files"]), ["1:cm2:p1"])
+                self.assertFalse(os.path.exists(f"{d}/c/assignments/only brief"))  # emptied folder removed
+                self.assertEqual(sorted(os.listdir(f"{d}/c/assignments/with files")), ["brief.html", "p1_auto.pdf"])
+            finally:
+                A.DEST = old
+
+    def test_schedule_hint(self):
+        old = A.SYNC_WINDOWS, A.CALENDAR_URL
+        try:
+            A.SYNC_WINDOWS, A.CALENDAR_URL = [["08:00", "16:00", 30], ["16:00", "20:00", 120]], "https://x/c.ics"
+            self.assertEqual(A.schedule_hint(), "syncs 08:00–20:00 and at lecture starts")
+            A.CALENDAR_URL = ""
+            self.assertEqual(A.schedule_hint(), "syncs 08:00–20:00")
+        finally:
+            A.SYNC_WINDOWS, A.CALENDAR_URL = old
+
+
 class Forum(unittest.TestCase):
     @staticmethod
     def row(did, last, title, subscribed=True):
