@@ -27,10 +27,17 @@ class Categories(unittest.TestCase):
             ("ASTheory1.pdf", "resource"): "slides",
             ("S02SR.pdf", "resource"): "slides",
             ("RL_emai_26_1.pdf", "resource"): "slides",
-            ("SR2026_problem_set02.pdf", "resource"): "exercises",
-            ("homeworks_1.pdf", "resource"): "exercises",
-            ("programming_project.pdf", "resource"): "exercises",
+            ("SR2026_problem_set02.pdf", "resource"): "assignments",
+            ("homeworks_1.pdf", "resource"): "assignments",
+            ("programming_project.pdf", "resource"): "assignments",
+            ("Lab1.pdf", "resource"): "assignments",
+            ("NLI_lab_2.pdf", "resource"): "assignments",
+            ("SR_hw1.pdf", "resource"): "assignments",
             ("Msc_Dec24.pdf", "resource"): "exercises",
+            ("Probability_Worksheet.pdf", "resource"): "exercises",
+            ("SolucionesA1_U1.pdf", "resource"): "exercises",
+            ("Syllabus.pdf", "resource"): "slides",          # "lab" inside a word is not a lab
+            ("Collaboration.pdf", "resource"): "slides",
             ("Mitchell _Krakauer_PNAS2023.pdf", "resource"): "readings",
             ("Building_machines_that_learn_and_think_with_people.pdf", "resource"): "readings",
             ("2.Reglas ortograficas_explicacion.ppsx", "resource"): "slides",
@@ -44,6 +51,17 @@ class Categories(unittest.TestCase):
     def test_categorize(self):
         for (fn, mod), want in self.cases().items():
             self.assertEqual(A.categorize(fn, mod), want, fn)
+
+    def test_labs_and_assignments_share_a_folder(self):
+        A.DEST = "/D"
+        item = dict(module="resource", context="", subdir="")
+        self.assertEqual(A.target_path(item, "ml", {}, "Lab2.pdf"), "/D/ml/assignments/Lab2_auto.pdf")
+        item = dict(module="assign", context="", subdir="Lab 3")
+        self.assertEqual(A.target_path(item, "ml", {}, "Lab3.pdf"), "/D/ml/assignments/Lab 3/Lab3_auto.pdf")
+        # lab notebooks: a course can send "code" to the same folder
+        item = dict(module="resource", context="", subdir="")
+        self.assertEqual(A.target_path(item, "ml", {"subfolders": {"code": "assignments"}}, "lab.ipynb"),
+                         "/D/ml/assignments/lab_auto.ipynb")
 
     def test_subfolder_override(self):
         A.DEST = "/D"

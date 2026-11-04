@@ -20,12 +20,24 @@ Files land in `<destination>/<course folder>/<type>/<name>_auto.<ext>`:
 
 ```
 natural_language_interaction/slides/L3_auto.pdf
-natural_language_interaction/lab/Extra1_emotion_auto.ipynb        # "code" remapped to lab/
+natural_language_interaction/assignments/Extra1_emotion_auto.ipynb   # lab notebook ("code" remapped, see Courses)
 natural_language_interaction/assignments/L4 ASR - Lab Delivery/feedback_auto.html
-symbolic_reasoning/lectures/S01SR_auto.pdf                        # "slides" remapped to lectures/
+introduction_to_machine_learning/assignments/Lab2_auto.pdf        # labs, problem sets, homework and projects
+introduction_to_machine_learning/exercises/Msc_Dec24_auto.pdf     # worksheets, solutions, past exams and quizzes
 ```
 
-The type folders are `slides`, `readings`, `exercises`, `assignments/<name>`, `code` (code and data) and `other`. Files are sorted by extension and filename; see `categorize()` in `aula_sync.py`.
+Every course gets the same folders, so a file's place doesn't depend on the subject:
+
+| Folder | What goes in it |
+|---|---|
+| `slides` | lecture slides and typed lecture notes |
+| `assignments` | labs, problem sets, homework and projects (their attachments, your submission and the feedback in `assignments/<name>/`). Labs and assignments share one folder because many courses use the two words for the same thing |
+| `exercises` | practice material: worksheets, solutions, past exams and quizzes |
+| `readings` | papers, chapters and books |
+| `code` | code and data files |
+| `other` | everything else |
+
+Files are sorted by extension and filename; see `categorize()` in `aula_sync.py`. Keep your own notes and scans out of these folders (for example `handwritten/`, `study/`): `*_auto` files are the ones this tool owns.
 
 **Safe to point at a folder you already use:**
 - It never deletes anything, and it only ever writes `*_auto*` files.
@@ -98,7 +110,7 @@ The type folders are `slides`, `readings`, `exercises`, `assignments/<name>`, `c
 New enrolments are picked up automatically. Each course gets a snake_case folder name and an entry in `~/Library/Application Support/aula-sync/courses.json`. To change a course, edit its entry:
 - `"include": false` excludes it.
 - `"folder"` sets its folder name, e.g. to match a folder you already have.
-- `"subfolders": {"slides": "lectures", "code": "lab"}` renames type folders for that course.
+- `"subfolders": {"code": "assignments"}` sends a type to another folder, for example when a course's code files are its lab notebooks. Avoid renaming `slides`, `assignments` or `exercises` per course: the same name in every course is what keeps the folders tidy (and what goodnotes-sync imports from).
 
 `courses.example.json` shows a full example.
 

@@ -88,8 +88,11 @@ CATEGORY_EXT = {
              "zip", "tar", "gz", "tgz", "7z", "rar", "csv", "tsv", "json", "arff", "txt", "xml", "yaml", "yml",
              "parquet", "npy", "pkl", "mat", "comp", "data", "xlsx", "xls"},
 }
-EXERCISE_RE = re.compile(r"problem.?set|homework|\bhw\d|exercis|worksheet|practica|soluci|solution|quiz|exam|"
-                         r"msc_dec|lab\d|project|assignment|enunciado", re.I)
+# Labs, problem sets, homework and projects all land in one folder, `assignments`; practice material (worksheets,
+# solutions, past exams and quizzes) goes to `exercises`
+ASSIGNMENT_RE = re.compile(r"problem.?set|homework|(?<![a-z])hw\d|(?<![a-z])lab(?:s|[\s_-]?\d+)?(?![a-z])|project|"
+                           r"assignment|enunciado", re.I)
+EXERCISE_RE = re.compile(r"exercis|worksheet|practica|soluci|solution|quiz|exam|msc_dec", re.I)
 READING_RE = re.compile(r"paper|reading|article|chapter|book|lectura|survey|arxiv|\d{4}\.\d{4,5}|pnas|"
                         r"et.?al|proceedings|journal|_(19|20)\d\d\b|(19|20)\d\d\.pdf$", re.I)
 SLIDE_RE = re.compile(r"slide|lecture|theory|tema|class|session|^l\d|^s\d\d|week|unit|intro", re.I)
@@ -156,6 +159,8 @@ def categorize(filename, module, context=""):
             return cat
     if e == "pdf":
         name = f"{filename} {context}"
+        if ASSIGNMENT_RE.search(name):
+            return "assignments"
         if EXERCISE_RE.search(name):
             return "exercises"
         if SLIDE_RE.search(filename):
